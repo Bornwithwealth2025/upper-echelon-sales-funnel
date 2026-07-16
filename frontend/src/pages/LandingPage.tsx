@@ -13,10 +13,10 @@ import {
   X,
 } from 'lucide-react';
 import {
-  Crest,
+  //Crest,
   InstagramIcon,
   LinkedinIcon,
-  Wordmark,
+// Wordmark,
   XMark,
   YoutubeIcon,
 } from '../components/UpperEchelonBrand';
