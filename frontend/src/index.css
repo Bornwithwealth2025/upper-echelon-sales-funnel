@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Poppins:wght@500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ue-navy: #0a1628;
+  --ue-navy-raised: #10203b;
+  --ue-navy-card: #0f1e38;
+  --ue-gold: #c9a445;
+  --ue-gold-light: #f0d48a;
+  --ue-gold-deep: #8a6e24;
+  --ue-ivory: #f6f3ec;
+  --ue-bg: #f9f7f2;
+  --ue-muted: #5b6479;
+
+  --ue-font-display: 'Playfair Display', Georgia, serif;
+  --ue-font-heading: 'Poppins', system-ui, sans-serif;
+  --ue-font-body: 'Inter', system-ui, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body {
+  font-family: var(--ue-font-body);
+  background-color: var(--ue-bg);
+  color: var(--ue-navy);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: var(--ue-gold);
+  color: var(--ue-navy);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ue-gold);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--ue-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ue-navy);
+  border-radius: 999px;
+  border: 2px solid var(--ue-bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ue-gold-deep);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ue-navy) var(--ue-bg);
+}
+
+code {
+  background-color: #f4f4f4;
+  padding: 2px 5px;
+  border-radius: 3px;
+}

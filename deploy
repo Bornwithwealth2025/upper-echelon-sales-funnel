@@ -1,0 +1,563 @@
+#!/bin/bash
+
+# =============================================
+# 🔐 Secure Deployment Script (No PM2 Daemon)
+# =============================================
+
+# Configuration variables
+COMMIT_MESSAGE="$COMMIT_MESSAGE"
+APP_NAME=$APP_NAME
+USER=$APP_USER
+REMOTE_IP=$REMOTE_IP
+REMOTE_PATH=$REMOTE_PATH
+BWWUSER=$BWWUSER
+
+# 🔧 Fix this path! Use Linux format, e.g., ~/.ssh/id_rsa
+SSH_KEY_PATH=$SSH_KEY_PATH # Fixed: Changed to Git Bash compatible path
+PM2_SHARED_DIR=$PM2_SHARED_DIR     # Shared location for PM2 data
+
+
+cat export-env.sh > export-config.sh 
+
+# Error handler
+error_exit() {
+    echo -e "\033[31m❌ Error: $1\033[0m" >&2 
+    exit "${2:-1}"
+}
+
+if [[ -z "$REMOTE_PATH" ]]; then
+    error_exit "REMOTE_PATH must be set in configuration, run the export file"
+fi
+
+# Validate inputs
+if [[ -z "$COMMIT_MESSAGE" ]]; then
+    echo "📌 Usage: $0 'Your commit message'"
+    error_exit "Commit message is required" 1
+fi
+
+if [[ -z "$REMOTE_IP" ]]; then
+    error_exit "REMOTE_IP must be set in configuration"
+fi
+
+if [[ ! -f "$SSH_KEY_PATH" ]]; then
+    error_exit "SSH private key not found at $SSH_KEY_PATH. Please check path and permissions."
+fi
+
+# Ensure SSH key has secure permissions
+if [[ -f "$SSH_KEY_PATH" ]]; then
+    PERMS=$(stat -c '%a' "$SSH_KEY_PATH" 2>/dev/null || stat -f '%A' "$SSH_KEY_PATH" 2>/dev/null)
+    if [[ "$PERMS" != "600" ]]; then
+        echo "🔐 Securing SSH key permissions..."
+        chmod 600 "$SSH_KEY_PATH" || error_exit "Failed to fix SSH key permissions"
+    fi
+fi
+
+# Main deployment function
+setup() {
+    echo "🚀 Starting secure deployment process..."
+
+    # Start SSH agent if needed
+    if ! pgrep -x ssh-agent > /dev/null; then
+        echo "🔑 Starting SSH agent..."
+        eval "$(ssh-agent -s)" > /dev/null || error_exit "Failed to start SSH agent"
+        ssh-add "$SSH_KEY_PATH" || error_exit "Failed to add SSH key to agent"
+    fi
+
+    # Clean up old archives
+    rm -f ./*.tar.gz 2>/dev/null || true
+
+    # Create temporary exclude list
+    local EXCLUDE_FILE="/tmp/exclude_list_$$.txt"
+    cat > "$EXCLUDE_FILE" << 'EOF'
+**/node_modules
+.cert
+.git
+coverage
+*.tar.gz
+deploy
+logs
+*.log
+.npm
+.cache
+tmp
+temp
+.DS_Store
+Thumbs.db
+*.key
+*.pem
+*.p12
+secrets
+**/dist
+config/production.json
+EOF
+
+    # Build archive
+    echo "📦 Creating application archive..."
+    if tar --exclude-from="$EXCLUDE_FILE" \
+           --ignore-failed-read \
+           -czf "${APP_NAME}.tar.gz" . 2>/dev/null; then
+        echo "✅ Archive created: ${APP_NAME}.tar.gz"
+    else
+        echo "⚠️ Primary tar failed. Trying fallback method..."
+        if tar -czf "${APP_NAME}.tar.gz" \
+               --exclude='node_modules' \
+               --exclude='.git' \
+               --exclude='*.tar.gz' \
+               --exclude='logs' \
+               --exclude='*.log' \
+               . 2>/dev/null; then
+            echo "✅ Archive created with basic exclusions"
+        else
+            echo "❌ Both tar methods failed."
+            ls -la | head -10
+            rm -f "$EXCLUDE_FILE"
+            error_exit "Archive creation failed – check file permissions and disk space"
+        fi
+    fi
+
+    # Cleanup
+    rm -f "$EXCLUDE_FILE"
+
+    # Verify archive
+    if [[ ! -f "${APP_NAME}.tar.gz" ]]; then
+        error_exit "Archive was not created successfully"
+    fi
+
+    # Test SSH connection
+    echo "Testing SSH connectivity..."
+    ssh -i "$SSH_KEY_PATH" -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no \
+         "${USER}@${REMOTE_IP}" "echo 'SSH connection OK'" || error_exit "SSH connection failed"
+
+    # Upload archive
+    echo "Uploading archive via SCP..."
+    # scp -i "$SSH_KEY_PATH" "export-config.sh" -o StrictHostKeyChecking=no \
+    #     "${APP_NAME}.tar.gz" "${USER}@${REMOTE_IP}:/tmp/" || error_exit "Upload failed"
+    scp -i "$SSH_KEY_PATH" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    export-config.sh \
+    "${APP_NAME}.tar.gz" \
+    "${USER}@${REMOTE_IP}:/tmp/" \
+    || error_exit "Upload failed"
+    
+    # Execute remote deployment
+    echo "🔧 Running remote deployment commands..."
+    
+    ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
+        "${USER}@${REMOTE_IP}" "sudo bash" << 'EOFREMOTE'
+        set -euo pipefail
+        chmod +x /tmp/export-config.sh
+        source /tmp/export-config.sh
+
+        if getent group administrator >/dev/null 2>&1; then
+            PRIV_GROUP="administrator"
+        elif getent group sudo >/dev/null 2>&1; then
+            PRIV_GROUP="sudo"
+        else
+            PRIV_GROUP=""
+        fi
+        
+         # Setup user and group
+        if grep -q "^${APP_RUNNER_USER}:" /etc/shadow 2>/dev/null; then
+            echo "👤 User $APP_RUNNER_USER already exists"
+        else
+            echo "👤 Creating user $APP_RUNNER_USER..."
+            sudo useradd -m -s /bin/bash "$APP_RUNNER_USER" || error_exit "Failed to create user $APP_RUNNER_USER"
+           
+        fi
+
+
+    if [[ -n "$PRIV_GROUP" ]]; then
+        echo "Adding $APP_RUNNER_USER to $PRIV_GROUP"
+
+        if ! sudo usermod -aG "$PRIV_GROUP" "$APP_RUNNER_USER"; then
+            echo "ERROR: Failed to add user to group"
+            exit 1
+        fi
+    fi
+
+        USER_HOME=$(getent passwd "$APP_RUNNER_USER" | cut -d: -f6)
+        if [[ -n "$USER_HOME" ]]; then
+            mkdir -p "$USER_HOME"
+            chown -R "$APP_RUNNER_USER:$APP_RUNNER_USER" "$USER_HOME"
+        fi
+
+        PORT=4000
+        PORT2=4050
+
+        # Restrictive umask
+        # umask==> remove 
+        # read (4) + write (2) + execute (1), all permissions (7)
+        umask 027
+
+        # Error handler for remote
+        #echo "Something went wrong" >&2
+        #This prints the message as an error, not normal output.
+        error_exit() {
+            echo -e "\033[31m❌ Remote Error: $1\033[0m" >&2
+        }
+
+       
+       
+        # Install Node.js and PM2 (globally)
+        setup_nodejs_npm() {
+            echo "Installing Node.js and PM2..."
+
+            if ! command -v node &>/dev/null; then
+                curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || error_exit "NodeSource setup failed"
+               sudo apt-get update && sudo apt-get install -y nodejs || error_exit "Node.js install failed"
+            fi
+
+            # if ! command -v pm2 &>/dev/null; then
+            #     npm install -g pm2@latest || error_exit "PM2 install failed"
+            # fi
+        }
+
+        # Install and configure Nginx
+        install_nginx() {
+            if ! command -v nginx &>/dev/null; then
+                echo "Installing Nginx..."
+                apt-get update && apt-get install -y nginx || error_exit "Nginx install failed"
+            fi
+
+            # Clean up conflicting configs
+            find /etc/nginx/sites-available /etc/nginx/sites-enabled -type f 2>/dev/null | while read -r file; do
+                if grep -q "server_name ${SERVER_DOMAIN_NAME}" "$file" 2>/dev/null; then
+                    if [[ "$file" != "/etc/nginx/sites-available/${APP_NAME}" ]]; then
+                        rm -f "$file"
+                    fi
+                fi
+            done
+            rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/${APP_NAME} 2>/dev/null || true
+
+            # Ensure include directive exists
+            if ! grep -q '/etc/nginx/sites-enabled/\*' /etc/nginx/nginx.conf; then
+                sed -i '/http[[:space:]]*{/a\    include /etc/nginx/sites-enabled/*;' /etc/nginx/nginx.conf
+            fi
+
+            # Write Nginx config
+            tee /etc/nginx/sites-available/${APP_NAME} > /dev/null << NGINX_EOF
+limit_req_zone \$binary_remote_addr zone=api:10m rate=10r/s;
+
+upstream backend {
+    server 127.0.0.1:4050 max_fails=3 fail_timeout=30s;
+    server 127.0.0.1:4000 max_fails=3 fail_timeout=30s;
+}
+
+server {
+    listen 80;
+    server_name _;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ${SERVER_DOMAIN_NAME};
+
+    ssl_certificate /etc/letsencrypt/live/bornwithwealth.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bornwithwealth.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+   # add_header Content-Security-Policy "default-src 'self' https:; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self' wss: https:;" always;
+
+    root ${REMOTE_PATH}/frontend/dist;
+    client_max_body_size 120M;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+    }
+
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 300s;
+    }
+
+ location  ~ /recordings/ {
+    root /home/recording-app/app/ui-recordings;   # ← note: no trailing / here
+
+    # Internally rewrite so \$uri becomes /rooms/.../file.mp4
+    rewrite ^/recordings(/.*)\$ \$1 break;
+
+    try_files \$uri =404;
+
+    default_type application/octet-stream;
+    add_header Content-Disposition "attachment; filename=\$1" always;
+}
+    
+
+      location /api/v1/rooms {
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://127.0.0.1:${PORT}/api/v1;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass_header Set-Cookie;
+        proxy_cache_bypass \$http_upgrade;
+        client_max_body_size 5M;
+    }
+
+    location /api/v1 {
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://127.0.0.1:${PORT}/api/v1;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass_header Set-Cookie;
+        proxy_cache_bypass \$http_upgrade;
+        client_max_body_size 120M;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        send_timeout 300s;
+    }
+
+     location = /campain-app/api/v1/assets/upload {
+        proxy_pass http://127.0.0.1:${PORT2}/campain-app/api/v1/assets/upload;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass_header Set-Cookie;
+        proxy_cache_bypass \$http_upgrade;
+        client_max_body_size 120M;
+        proxy_request_buffering off;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+        send_timeout 600s;
+    }
+
+     location /campain-app/api/v1 {
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://127.0.0.1:${PORT2}/campain-app/api/v1;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass_header Set-Cookie;
+        proxy_cache_bypass \$http_upgrade;
+        client_max_body_size 120M;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        send_timeout 300s;
+    }
+
+     location /campain-app/uploads{
+
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://127.0.0.1:${PORT2}/campain-app/uploads;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass_header Set-Cookie;
+        proxy_cache_bypass \$http_upgrade;
+        client_max_body_size 120M;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        send_timeout 300s;
+    }
+
+
+    location ~ /\. {
+        deny all;
+    }
+    
+    location ~ ^/(\.env|config/|\.git) {
+        deny all;
+    }
+}
+NGINX_EOF
+
+            ln -sf /etc/nginx/sites-available/${APP_NAME} /etc/nginx/sites-enabled/${APP_NAME}
+            nginx -t && systemctl reload nginx && systemctl enable nginx
+        }
+
+
+        
+
+        # Prepare app directory
+        prepare_application() {
+            echo " Preparing application directory..."
+            mkdir -p "${REMOTE_PATH}"
+            chown -R "${APP_RUNNER_USER}:${APP_RUNNER_USER}" "${REMOTE_PATH}"
+            cd "${REMOTE_PATH}" || error_exit "Failed to enter ${REMOTE_PATH}"
+
+            mv "/tmp/${APP_NAME}.tar.gz" ./
+            chown "${APP_RUNNER_USER}:${APP_RUNNER_USER}" "${APP_NAME}.tar.gz"
+
+            # Clear old files
+            su - "${APP_RUNNER_USER}" -c "cd ${REMOTE_PATH} && find . -maxdepth 1 -not -name '${APP_NAME}.tar.gz' -not -name '.' -not -name '..' -exec rm -rf {} + 2>/dev/null || true"
+
+            # Extract
+            su - "${APP_RUNNER_USER}" -c "cd ${REMOTE_PATH} && tar -xzf '${APP_NAME}.tar.gz'"
+            su - "${APP_RUNNER_USER}" -c "cd ${REMOTE_PATH} && rm -f '${APP_NAME}.tar.gz'"
+            # take care of backend
+            sleep 3
+            su - "${APP_RUNNER_USER}" -c "source ~/.profile 2>/dev/null; cd ${REMOTE_PATH}/backend && npm ci " || error_exit "npm ci failed for backend"
+            sleep 3
+            su - "${APP_RUNNER_USER}" -c "source ~/.profile 2>/dev/null; cd ${REMOTE_PATH}/backend &&  npm run build" || error_exit "Build failed"
+            su - "${APP_RUNNER_USER}" -c "source ~/.profile 2>/dev/null; cp ${REMOTE_PATH}/backend/.env ${REMOTE_PATH}/backend/dist/ || error_exit 'Failed to copy .env'"
+           # take care of frontend
+
+            sudo chmod 655 ${REMOTE_PATH}/backend/.env
+            sleep 3
+            cd "${REMOTE_PATH}/frontend" || error_exit "Failed to enter ${REMOTE_PATH}/frontend"
+            su - "${APP_RUNNER_USER}" -c "source ~/.profile 2>/dev/null; cd ${REMOTE_PATH}/frontend && npm ci" || error_exit "npm install failed"
+            sleep 2
+            su - "${APP_RUNNER_USER}" -c "source ~/.profile 2>/dev/null; cd ${REMOTE_PATH}/frontend && npm install --save-dev terser" || error_exit "Terser install failed"
+            sleep 3
+            su - "${APP_RUNNER_USER}" -c "source ~/.profile 2>/dev/null; cd ${REMOTE_PATH}/frontend && npm run build" || error_exit "Frontend build failed"
+            cd "${REMOTE_PATH}" || error_exit "Failed to enter ${REMOTE_PATH}"
+
+
+            # Secure permissions
+            chown -R "${APP_RUNNER_USER}:${APP_RUNNER_USER}" "${REMOTE_PATH}"
+            find "${REMOTE_PATH}" -type d -exec chmod 755 {} \;
+            find "${REMOTE_PATH}" -type f -exec chmod 644 {} \;
+            # Make node_modules executables runnable
+            find "${REMOTE_PATH}" -path "*/node_modules/.bin/*" -exec chmod 755 {} \; 2>/dev/null || true
+            find "${REMOTE_PATH}" -name ".env*" -exec chmod 600 {} \; 2>/dev/null || true
+        }
+
+        create_app_service_file(){
+        
+        # Create service file as root
+        sudo tee /etc/systemd/system/${APP_NAME}.service > /dev/null << EOF
+        [Unit]
+        Description=BWW Lead Application
+        After=network.target mysql.service
+        Wants=network.target
+
+        [Service]
+        Type=simple
+        User=${APP_RUNNER_USER}
+        Group=${APP_RUNNER_USER}
+        WorkingDirectory=${REMOTE_PATH}/backend
+        EnvironmentFile=-${REMOTE_PATH}/backend/.env
+        ExecStart=/usr/bin/node ${REMOTE_PATH}/backend/dist/index.js
+        ExecReload=/bin/kill -HUP \$MAINPID
+        Restart=always
+        RestartSec=10
+        StandardOutput=journal
+        StandardError=journal
+        SyslogIdentifier=${APP_NAME}
+        Environment=NODE_ENV=production
+        Environment=PORT=4050
+        # Security hardening
+        NoNewPrivileges=true
+        PrivateTmp=true
+        ProtectSystem=strict
+        ProtectHome=false
+        ReadWritePaths=${REMOTE_PATH} /var/log/${APP_NAME}
+        # Limit resources
+        MemoryMax=500M
+        CPUQuota=80%
+
+        [Install]
+        WantedBy=multi-user.target
+EOF
+        # Create log directory
+        sudo mkdir -p /var/log/${APP_NAME}
+        sudo chown ${APP_RUNNER_USER}:${APP_RUNNER_USER} /var/log/${APP_NAME}
+        sudo chmod 755 /var/log/${APP_NAME}
+
+        }
+
+    
+        # Start services WITHOUT DAEMONIZING
+        start_services() {
+            nginx -t && systemctl restart nginx
+            sleep 2
+                    echo "Ensuring ${APP_NAME} service definition is up to date..."
+                    create_app_service_file
+                    sudo systemctl daemon-reload
+                    sudo systemctl enable ${APP_NAME}
+                    echo "Restarting ${APP_NAME} service..."
+                    sudo systemctl restart ${APP_NAME} || error_exit "Failed to restart ${APP_NAME} service"
+    
+        }
+
+        # Run steps
+        setup_nodejs_npm
+        install_nginx
+        prepare_application
+        start_services
+EOFREMOTE
+
+    # Local cleanup
+    echo "🧹 Cleaning up local archive..."
+    rm -f "${APP_NAME}.tar.gz"
+    echo "✅ Deployment finished successfully!"
+}
+
+# Push to GitHub
+send_to_github() {
+    rm -f export-config.sh 2>/dev/null || true
+    echo "📤 Pushing changes to GitHub..."
+    if git diff-index --quiet HEAD --; then
+        echo "🟢 No changes to commit."
+        return 0
+    fi
+
+    git add . && \
+    git commit -m "$COMMIT_MESSAGE" && \
+    git push || error_exit "Git operation failed"
+    
+    echo "✅ Pushed to GitHub"
+}
+
+# Main entry point
+main() {
+    echo "🚀 Deploying to meet.bornwithwealth.com"
+    echo "📝 Commit: $COMMIT_MESSAGE"
+    echo "🌐 Server: $REMOTE_IP"
+    echo ""
+   #
+    setup
+    if [[ "$PUSH_TO_GITHUB" == "true" ]]; then
+        send_to_github
+    fi
+  
+    echo ""
+    echo "🎉 SUCCESS! App is now running in the foreground."
+    echo "💡 Press Ctrl+C to stop the app."
+    echo "🔗 Visit: https://$SERVER_DOMAIN_NAME"
+}
+
+main "$@"

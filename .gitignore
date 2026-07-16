@@ -1,0 +1,10 @@
+**/node_modules
+note*
+**/.env
+**/.env.local
+prompt.md
+export-env.sh
+export-config.sh
+remote-setup.sh
+**/dist
+backend/uploads
