@@ -3,7 +3,7 @@
 # =============================================
 # 🔐 Secure Deployment Script (No PM2 Daemon)
 # =============================================
-
+source export-env.sh
 # Configuration variables
 COMMIT_MESSAGE="$COMMIT_MESSAGE"
 APP_NAME=$APP_NAME

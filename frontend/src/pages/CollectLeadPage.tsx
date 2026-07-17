@@ -141,7 +141,7 @@ const CollectLeadPage: React.FC = () => {
     e.preventDefault();
     setError('');
     setSuccess(false);
-    setSuccessMessage('Application submitted successfully.');
+    setSuccessMessage('Application submitted successfully. One of our team members will reach out to you shortly.');
     setLoading(true);
 
     try {
@@ -218,12 +218,12 @@ const CollectLeadPage: React.FC = () => {
             <Crest size={38} />
             <Wordmark tone="dark" className="hidden sm:block" />
           </Link>
-          <Link
+          {/* <Link
             to="/login"
             className="text-sm font-semibold text-[#0a1628] hover:text-[#8a6e24] transition"
           >
             Promoter Login
-          </Link>
+          </Link> */}
         </div>
       </nav>
 
@@ -359,38 +359,6 @@ const CollectLeadPage: React.FC = () => {
                 disabled={loading}
                 rows={4}
                 className={`${inputClasses} resize-none`}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="markerId" className={labelClasses}>
-                Marker ID <span className="text-slate-400 text-xs font-normal">(Optional)</span>
-              </label>
-              <input
-                type="text"
-                id="markerId"
-                name="markerId"
-                value={formData.markerId || ''}
-                onChange={handleChange}
-                placeholder="campaign-marker-123"
-                disabled={loading}
-                className={inputClasses}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="marketingCategory" className={labelClasses}>
-                Marketing Category <span className="text-slate-400 text-xs font-normal">(Optional)</span>
-              </label>
-              <input
-                type="text"
-                id="marketingCategory"
-                name="marketingCategory"
-                value={formData.marketingCategory || ''}
-                onChange={handleChange}
-                placeholder="social, search, email, referral"
-                disabled={loading}
-                className={inputClasses}
               />
             </div>
 
