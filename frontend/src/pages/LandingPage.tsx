@@ -125,12 +125,12 @@ const Nav: React.FC = () => {
         </nav>
 
         <div className="flex items-center gap-4">
-          <Link
+          {/* <Link
             to="/login"
             className="hidden text-sm font-semibold text-[#0a1628] transition-colors hover:text-[#8a6e24] sm:inline-block"
           >
             Member Login
-          </Link>
+          </Link> */}
 
           <Link
             to="/collect"

@@ -107,24 +107,24 @@ const DashboardPage: React.FC = () => {
                 </span>
               </div>
               <div className="flex flex-wrap justify-center gap-2 w-full sm:w-auto">
-                <Link
+                {/* <Link
                   to="/collect"
                   className="flex-1 sm:flex-none bg-[#c9a445] text-[#0a1628] px-3 sm:px-6 py-2 rounded-lg hover:bg-[#e7c972] transition text-sm text-center font-semibold"
                 >
                   Add Lead
-                </Link>
-                <Link
+                </Link> */}
+                {/* <Link
                   to="/campaigns"
                   className="flex-1 sm:flex-none bg-white/10 text-white px-3 sm:px-6 py-2 rounded-lg hover:bg-white/20 transition text-sm text-center"
                 >
                   📧 Campaigns
-                </Link>
-                <Link
+                </Link> */}
+                {/* <Link
                   to="/assets"
                   className="flex-1 sm:flex-none bg-white/10 text-white px-3 sm:px-6 py-2 rounded-lg hover:bg-white/20 transition text-sm text-center"
                 >
                   🗂 Assets
-                </Link>
+                </Link> */}
                 <button
                   onClick={handleLogout}
                   className="flex-1 sm:flex-none bg-red-600 text-white px-3 sm:px-6 py-2 rounded-lg hover:bg-red-700 transition text-sm"
