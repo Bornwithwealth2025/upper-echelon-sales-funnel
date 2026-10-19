@@ -1,6 +1,5 @@
 **/node_modules
 note*
-**/.env
 **/.env.local
 prompt.md
 export-env.sh
@@ -11,3 +10,4 @@ backend/uploads
 branch_structure.json
 temp_auto_push.bat
 temp_interactive_push.bat
+config.bat
