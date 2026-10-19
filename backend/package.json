@@ -4,9 +4,9 @@
   "description": "Lead Collector API",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && tsc-alias",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "build": "node init && tsc && tsc-alias",
+    "start": "node init && node dist/index.js",
+    "dev": "node init && ts-node src/index.ts",
     "dev:watch": "nodemon --exec ts-node src/index.ts",
     "test": "jest"
   },
